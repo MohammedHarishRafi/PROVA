@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pydantic
+gitpython
+reportlab
+faiss-cpu
+sentence-transformers
+numpy
+google-genai
+openai
+ollama
+httpx
+python-multipart
+groq
