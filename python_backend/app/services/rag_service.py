@@ -4,7 +4,6 @@ import json
 import faiss
 import numpy as np
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
 from app.config import app_config
 
 class RagService:
@@ -76,6 +75,7 @@ class RagService:
             self.initialization_status = "No documents found to index"
             return
             
+        from sentence_transformers import SentenceTransformer
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         embeddings = self.model.encode(all_chunks, show_progress_bar=False)
         embeddings = np.array(embeddings).astype('float32')
@@ -94,6 +94,7 @@ class RagService:
 
     def load_index(self):
         try:
+            from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer('all-MiniLM-L6-v2')
             self.index = faiss.read_index(str(self.index_path))
             with open(self.meta_path, 'r', encoding='utf-8') as f:
