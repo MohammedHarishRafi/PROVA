@@ -343,15 +343,30 @@ test.describe('Navigation & Core Routing', () => {
         
         # Determine base URL for tests
         from app.services.project_runner_service import project_runner_service
+        target_url = base_url
         if repo_name in project_runner_service.runs and project_runner_service.runs[repo_name].get("status") in ("RUNNING", "RUNNING_API"):
             port = project_runner_service.runs[repo_name].get("port")
             preferred_path = project_runner_service.runs[repo_name].get("preferred_preview_path")
-            if port:
-                base_url = f"http://127.0.0.1:{port}"
+            
+            # If using a remote Playwright service, we route tests to the backend's proxy url
+            backend_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("BACKEND_URL")
+            if backend_url:
+                target_url = backend_url.rstrip("/") + f"/api/run/preview/{repo_name}"
                 if preferred_path:
-                    base_url = base_url.rstrip("/") + "/" + preferred_path.lstrip("/")
-                env["BASE_URL"] = base_url
-                env["PLAYWRIGHT_BASE_URL"] = base_url
+                    target_url = target_url.rstrip("/") + "/" + preferred_path.lstrip("/")
+            elif port:
+                target_url = f"http://127.0.0.1:{port}"
+                if preferred_path:
+                    target_url = target_url.rstrip("/") + "/" + preferred_path.lstrip("/")
+        
+        if target_url:
+            env["BASE_URL"] = target_url
+            env["PLAYWRIGHT_BASE_URL"] = target_url
+
+        # Check if external playwright service is configured
+        playwright_service_url = os.environ.get("PLAYWRIGHT_SERVICE_URL")
+        if playwright_service_url:
+            return await self._execute_tests_remotely(repo_name, project_dir, target_url, playwright_service_url)
 
         # Force Playwright's JSON reporter to write to this file instead of stdout
         env["PLAYWRIGHT_JSON_OUTPUT_NAME"] = "playwright-report/test-results.json"
@@ -396,6 +411,79 @@ test.describe('Navigation & Core Routing', () => {
             "Ensure `@playwright/test` is in devDependencies and tests exist.\n\n"
             f"Output:\n{output[-3000:]}"
         )
+
+    async def _execute_tests_remotely(
+        self, repo_name: str, project_dir: Path, target_url: str, playwright_service_url: str
+    ) -> Dict[str, Any]:
+        """Send tests and target url to the remote Playwright microservice and unpack reports."""
+        import base64
+        import io
+        import zipfile
+        import httpx
+
+        # 1. Locate all test files in the project
+        test_files = []
+        test_paths = self._find_test_files(project_dir)
+        
+        for path_str in test_paths:
+            path = Path(path_str)
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+                test_files.append({
+                    "name": path.name,
+                    "content": content
+                })
+            except Exception as e:
+                print(f"[Playwright Integration] Error reading spec file {path.name}: {e}")
+
+        # 2. POST to the remote Playwright service
+        payload = {
+            "baseURL": target_url,
+            "testFiles": test_files
+        }
+        
+        url = f"{playwright_service_url.rstrip('/')}/run"
+        print(f"[Playwright Integration] Dispatching tests to external service: {url} (baseURL: {target_url})")
+        
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                resp = await client.post(url, json=payload)
+                
+            if resp.status_code != 200:
+                return self._error(f"Remote Playwright execution service returned status code {resp.status_code}:\n{resp.text[:2000]}")
+                
+            data = resp.json()
+            if not data.get("success"):
+                return self._error(f"Remote Playwright execution service failed:\n{data.get('error')}")
+                
+            # 3. Create local playwright-report directory
+            report_dir = project_dir / "playwright-report"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 4. Write test-results.json report
+            json_report_path = report_dir / "test-results.json"
+            if data.get("testResultsJson"):
+                json_report_path.write_text(json.dumps(data["testResultsJson"]), encoding="utf-8")
+                
+            # 5. Extract HTML report zip
+            zip_base64 = data.get("htmlReportZipBase64")
+            if zip_base64:
+                try:
+                    zip_bytes = base64.b64decode(zip_base64)
+                    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+                        z.extractall(str(report_dir))
+                    print(f"[Playwright Integration] Successfully unpacked remote HTML report into: {report_dir}")
+                except Exception as zip_err:
+                    print(f"[Playwright Integration] Error extracting HTML report zip: {zip_err}")
+
+            if json_report_path.exists():
+                return self._parse_json_results(json_report_path, report_dir, repo_name)
+                
+            return self._error(f"Remote execution completed successfully, but did not return a valid test results JSON.\nExit code: {data.get('exitCode')}\n\nStdout:\n{data.get('stdout', '')[-1500:]}")
+            
+        except Exception as exc:
+            return self._error(f"Failed to communicate with external Playwright validation service at {url}: {exc}")
+
 
     async def _run_subprocess(self, cmd: list, cwd: Path, env: dict):
         """Run a subprocess asynchronously and return (success, combined_output)."""
