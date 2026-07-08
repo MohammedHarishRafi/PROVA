@@ -19,7 +19,7 @@ class RagService:
         self.index_path = app_config.workspace_directory / "faiss_index.bin"
         self.meta_path = app_config.workspace_directory / "metadata.json"
         
-        self.initialize_rag()
+        # self.initialize_rag()
         
     def chunk_markdown(self, file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -111,6 +111,11 @@ class RagService:
             self.build_index()
 
     def search(self, query: str, top_k: int = 3):
+        if not self.is_initialized:
+            try:
+                self.initialize_rag()
+            except Exception as e:
+                self.initialization_status = f"Lazy initialization failed: {e}"
         if not self.is_initialized:
             return []
             
