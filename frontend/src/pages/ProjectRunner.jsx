@@ -1,0 +1,426 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+ API_BASE_URL,
+ migrateRepository, getMigrationStatus, startProject, stopProject, getProjectStatus
+} from '../api';
+
+import ProjectRunnerDashboard from '../components/MigrationCenter/ProjectRunnerDashboard';
+import LogConsole from '../components/MigrationCenter/LogConsole';
+import LiveApplicationReview from '../components/MigrationCenter/LiveApplicationReview';
+import { FileText, ArrowRight, CheckCircle2, ShieldAlert } from 'lucide-react';
+
+export default function MigrationCenter({ 
+ setActiveTab, 
+ analysisResult,
+ repoUrl,
+ setRepoUrl,
+ targetVersion,
+ setTargetVersion,
+ loading,
+ setLoading,
+ result,
+ setResult,
+ error,
+ setError,
+ statusText,
+ setStatusText,
+ history,
+ setHistory,
+ elapsedTime,
+ timeTaken,
+ setTimeTaken,
+ workflowState,
+ setWorkflowState
+}) {
+ const repoName = repoUrl ? repoUrl.split('/').pop().replace('.git', '') : '';
+
+ const [runnerStatus, setRunnerStatus] = useState('IDLE');
+ const [runnerPort, setRunnerPort] = useState(null);
+ const [runnerType, setRunnerType] = useState(null);
+ const [runnerPreviewUrl, setRunnerPreviewUrl] = useState(null);
+ const [runnerEndpoints, setRunnerEndpoints] = useState([]);
+ const [runnerErrorReason, setRunnerErrorReason] = useState(null);
+ const [runnerNoUiMessage, setRunnerNoUiMessage] = useState(null);
+ const [runnerSwaggerUrl, setRunnerSwaggerUrl] = useState(null);
+ const [iframeKey, setIframeKey] = useState(0);
+ const [runnerLogs, setRunnerLogs] = useState('');
+ const [runnerLoading, setRunnerLoading] = useState(false);
+ const [activePreviewTab, setActivePreviewTab] = useState('logs');
+ const [copiedPath, setCopiedPath] = useState(null);
+
+
+ // SECTION REFS
+ const historyRef = useRef(null);
+ const buildRef = useRef(null);
+ const auditRef = useRef(null);
+ const llmRef = useRef(null);
+
+ const scrollToSection = (ref) => {
+ if (ref && ref.current) {
+ ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+ }
+ };
+
+ const getPreviewSrc = (previewUrl) => {
+ if (!previewUrl) return null;
+ try {
+ const parsed = new URL(previewUrl, window.location.origin);
+ if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+ return parsed.pathname + parsed.search + parsed.hash;
+ }
+ } catch (e) {
+ if (previewUrl.startsWith('/')) {
+ return previewUrl;
+ }
+ }
+ return previewUrl;
+ };
+
+ const previewSrc = getPreviewSrc(runnerPreviewUrl);
+ const previewBaseUrl = previewSrc || (runnerPort ? `http://localhost:${runnerPort}` : '');
+
+ const setupLogsWebSocket = () => {
+ if (!repoName) return;
+ const apiBase = API_BASE_URL;
+ let wsUrl;
+ if (apiBase.startsWith('http://') || apiBase.startsWith('https://')) {
+ const wsScheme = apiBase.startsWith('https') ? 'wss:' : 'ws:';
+ const urlObj = new URL(apiBase);
+ wsUrl = `${wsScheme}//${urlObj.host}${urlObj.pathname}/ws/run/logs/${repoName}`;
+ } else {
+ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+ wsUrl = `${protocol}//${window.location.host}${apiBase}/ws/run/logs/${repoName}`;
+ }
+ const ws = new WebSocket(wsUrl);
+ 
+ ws.onmessage = (event) => {
+ setRunnerLogs(prev => prev + event.data);
+ const consoleElem = document.getElementById('runner-console');
+ if (consoleElem) {
+ consoleElem.scrollTop = consoleElem.scrollHeight;
+ }
+ };
+ 
+ ws.onerror = (err) => {
+ console.error("Runner WebSocket error:", err);
+ };
+ 
+ return ws;
+ };
+
+ const startRunnerPolling = () => {
+ if (!repoName) return;
+ 
+ const interval = setInterval(async () => {
+ try {
+ const data = await getProjectStatus(repoName);
+ setRunnerStatus(data.status);
+ setRunnerPort(data.port);
+ setRunnerType(data.projectType);
+ setRunnerPreviewUrl(data.previewUrl);
+ setRunnerEndpoints(data.endpoints || []);
+ setRunnerErrorReason(data.errorReason);
+ setRunnerNoUiMessage(data.noUiMessage || null);
+ setRunnerSwaggerUrl(data.swaggerUrl || null);
+ 
+ if (data.status === 'RUNNING' || data.status === 'RUNNING_API') {
+ setActivePreviewTab('preview');
+ }
+ 
+ if (data.status !== 'STARTING') {
+ clearInterval(interval);
+ }
+ } catch (err) {
+ console.error("Error polling project runner:", err);
+ clearInterval(interval);
+ }
+ }, 2000);
+ 
+ return () => clearInterval(interval);
+ };
+
+ useEffect(() => {
+ let cleanupPoll = () => {};
+ if (repoName && result && result.buildStatus === 'Build Success') {
+ const checkInitialStatus = async () => {
+ try {
+ const data = await getProjectStatus(repoName);
+ setRunnerStatus(data.status);
+ setRunnerPort(data.port);
+ setRunnerType(data.projectType);
+ setRunnerPreviewUrl(data.previewUrl);
+ setRunnerEndpoints(data.endpoints || []);
+ setRunnerErrorReason(data.errorReason);
+ setRunnerNoUiMessage(data.noUiMessage || null);
+ setRunnerSwaggerUrl(data.swaggerUrl || null);
+ 
+ if (data.status === 'STARTING') {
+ setupLogsWebSocket();
+ cleanupPoll = startRunnerPolling();
+ } else if (data.status === 'RUNNING' || data.status === 'RUNNING_API') {
+ setupLogsWebSocket();
+ setActivePreviewTab('preview');
+ }
+ } catch (err) {
+ console.error(err);
+ }
+ };
+ checkInitialStatus();
+ }
+ return () => cleanupPoll();
+ }, [repoName, result]);
+
+ // Removed testing useHooks
+
+ const handleStartProject = async () => {
+ if (!repoName) return;
+ setRunnerLoading(true);
+ setRunnerLogs('Starting application...\n');
+ setRunnerErrorReason(null);
+ setActivePreviewTab('logs');
+ try {
+ const data = await startProject(repoName);
+ setRunnerStatus(data.status);
+ setRunnerPort(data.port);
+ setRunnerType(data.projectType);
+ setupLogsWebSocket();
+ startRunnerPolling();
+ } catch (err) {
+ console.error(err);
+ setRunnerStatus('FAILED');
+ setRunnerErrorReason(err.message || 'Failed to start the application server.');
+ } finally {
+ setRunnerLoading(false);
+ }
+ };
+
+ const handleStopProject = async () => {
+ if (!repoName) return;
+ setRunnerLoading(true);
+ try {
+ await stopProject(repoName);
+ setRunnerStatus('STOPPED');
+ setRunnerPreviewUrl(null);
+ setRunnerEndpoints([]);
+ } catch (err) {
+ console.error(err);
+ } finally {
+ setRunnerLoading(false);
+ }
+ };
+
+ const handleRestartProject = async () => {
+ if (!repoName) return;
+ setRunnerLoading(true);
+ setRunnerLogs('Restarting application...\n');
+ setRunnerErrorReason(null);
+ setIframeKey(prev => prev + 1);
+ try {
+ await stopProject(repoName);
+ const data = await startProject(repoName);
+ setRunnerStatus(data.status);
+ setRunnerPort(data.port);
+ setRunnerType(data.projectType);
+ setupLogsWebSocket();
+ startRunnerPolling();
+ } catch (err) {
+ setRunnerErrorReason(err.response?.data?.detail || err.message || 'Unknown error');
+ setRunnerStatus('FAILED');
+ } finally {
+ setRunnerLoading(false);
+ }
+ };
+
+ const handleRefreshPreview = () => {
+ setIframeKey(prev => prev + 1);
+ };
+
+ const copyToClipboard = (text) => {
+ navigator.clipboard.writeText(text);
+ setCopiedPath(text);
+ setTimeout(() => setCopiedPath(null), 2000);
+ };
+
+ const handleMigrate = async (e) => {
+ e.preventDefault();
+ if (!repoUrl) {
+ setError("Please perform Repository Analysis first to load a repository.");
+ return;
+ }
+
+ setLoading(true);
+ setError(null);
+ setResult(null);
+ setTimeTaken(null);
+ setStatusText('Queuing migration task...');
+
+ const startTime = Date.now();
+
+ try {
+ const taskData = await migrateRepository(repoUrl, targetVersion);
+ const taskId = taskData.task_id;
+
+ setStatusText('Migration task is running in the background...');
+
+ const pollStatus = async () => {
+ try {
+ const statusData = await getMigrationStatus(taskId);
+ 
+ if (statusData.status === 'SUCCESS') {
+ const data = statusData.result;
+ const endTime = Date.now();
+ const duration = ((endTime - startTime) / 1000).toFixed(1);
+
+ if (data.errorMessage) {
+ setError(data.errorMessage);
+ } else {
+ setResult(data);
+ setTimeTaken(duration);
+ localStorage.setItem('last_migration_time', JSON.stringify(duration));
+ localStorage.setItem('last_migration', JSON.stringify(data));
+
+ setPlaywrightResult(null);
+ const repoNameForPw = repoUrl.split('/').pop().replace('.git', '');
+ try {
+ setPlaywrightLoading(true);
+ const pwRunResult = await runPlaywrightTests(repoNameForPw);
+ setPlaywrightResult(pwRunResult);
+ if (pwRunResult.status === 'RUNNING') {
+ const pollPw = setInterval(async () => {
+ try {
+ const polled = await getPlaywrightStatus(repoNameForPw);
+ setPlaywrightResult(polled);
+ if (polled.status !== 'RUNNING') {
+ clearInterval(pollPw);
+ setPlaywrightLoading(false);
+ }
+ } catch (_) { clearInterval(pollPw); setPlaywrightLoading(false); }
+ }, 3000);
+ } else {
+ setPlaywrightLoading(false);
+ }
+ } catch (_) {
+ setPlaywrightLoading(false);
+ }
+
+ const historyEntry = {
+ id: Date.now(),
+ repoUrl,
+ targetVersion: data.targetVersion,
+ success: data.success,
+ buildStatus: data.buildStatus,
+ modifiedFiles: data.modifiedFiles?.length || 0,
+ timestamp: new Date().toLocaleString(),
+ };
+ const updatedHistory = [historyEntry, ...history].slice(0, 20);
+ setHistory(updatedHistory);
+ localStorage.setItem('migration_history', JSON.stringify(updatedHistory));
+ 
+ const stats = JSON.parse(localStorage.getItem('assistant_stats') || '{"reposAnalyzed":0,"migrationsRun":0,"filesConverted":0}');
+ stats.migrationsRun += 1;
+ localStorage.setItem('assistant_stats', JSON.stringify(stats));
+ }
+ setLoading(false);
+ } else if (statusData.status === 'FAILURE') {
+ setError(statusData.error || 'Migration task failed in the background queue.');
+ setLoading(false);
+ } else {
+ setTimeout(pollStatus, 3000);
+ }
+ } catch (err) {
+ setError(err.response?.data?.message || err.message || 'Error polling migration status.');
+ setLoading(false);
+ }
+ };
+
+ setTimeout(pollStatus, 3000);
+
+ } catch (err) {
+ setError(err.response?.data?.message || err.message || 'An error occurred during repository migration queueing.');
+ setLoading(false);
+ }
+ };
+
+ const clearHistory = () => {
+ setHistory([]);
+ localStorage.removeItem('migration_history');
+ };
+
+ if (!workflowState?.analysisCompleted) {
+  return (
+    <div style={{ textAlign: 'center', marginTop: 100 }}>
+      <h2 style={{ color: '#101828', marginBottom: 16 }}>Complete Repository Analysis before accessing Project Runner.</h2>
+      <button
+        onClick={() => setActiveTab('analysis')}
+        style={{
+          background: '#5B5FF6', color: '#fff', border: 'none', padding: '10px 20px',
+          borderRadius: '8px', cursor: 'pointer', fontWeight: 600
+        }}
+      >
+        Go to Repository Analysis
+      </button>
+    </div>
+  );
+ }
+
+  return (
+  <div className="space-y-8 animate-fadeIn">
+  {/* Project Runner Dashboard section */}
+  <ProjectRunnerDashboard
+  runnerStatus={runnerStatus}
+  runnerPort={runnerPort}
+  runnerType={runnerType}
+  handleStartProject={handleStartProject}
+  handleStopProject={handleStopProject}
+  handleRestartProject={handleRestartProject}
+  runnerLoading={runnerLoading}
+  />
+
+
+
+  <div className="grid gap-4 h-[600px] mb-8 grid-cols-1 lg:grid-cols-2 mt-8">
+  <LogConsole
+  runnerLogs={runnerLogs}
+  setRunnerLogs={setRunnerLogs}
+  copiedPath={copiedPath}
+  copyToClipboard={copyToClipboard}
+  />
+  
+  <LiveApplicationReview
+  runnerStatus={runnerStatus}
+  runnerPreviewUrl={runnerPreviewUrl}
+  handleRefreshPreview={handleRefreshPreview}
+  iframeKey={iframeKey}
+  repoName={repoName}
+  runnerErrorReason={runnerErrorReason}
+  runnerPort={runnerPort}
+  runnerNoUiMessage={runnerNoUiMessage}
+  runnerSwaggerUrl={runnerSwaggerUrl}
+  runnerEndpoints={runnerEndpoints}
+  copyToClipboard={copyToClipboard}
+  copiedPath={copiedPath}
+  previewBaseUrl={previewBaseUrl}
+  previewSrc={previewSrc}
+  />
+  </div>
+ 
+ <div className="flex justify-end mt-8">
+  <button
+    onClick={() => {
+      if (runnerStatus === 'RUNNING' || runnerStatus === 'RUNNING_API' || runnerStatus === 'SUCCESS' || runnerStatus === 'SUCCESSFUL') {
+        if (typeof setWorkflowState === 'function') {
+          setWorkflowState(prev => ({ ...prev, runnerCompleted: true }));
+        }
+        setActiveTab('test-recommendation');
+      }
+    }}
+    disabled={!(runnerStatus === 'RUNNING' || runnerStatus === 'RUNNING_API' || runnerStatus === 'SUCCESS' || runnerStatus === 'SUCCESSFUL')}
+    className="flex items-center gap-2 px-6 py-3 bg-[#5B5FF6] hover:bg-[#4F54D8] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-card transition-all"
+  >
+    Continue to AI Test Recommendation <ArrowRight size={18} />
+  </button>
+ </div>
+
+ </div>
+ );
+}

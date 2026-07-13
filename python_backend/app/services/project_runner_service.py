@@ -720,6 +720,7 @@ class ProjectRunnerService:
         self.add_log(repo_name, f"Allocated Local Port: {port}")
         self.add_log(repo_name, f"WorkingDirectory: {run_dir}\n")
 
+        is_windows = os.name == 'nt'
         env, java_home = java_runtime_service.prepare_env(project_dir=run_dir)
         env["MAVEN_OPTS"] = "-Xmx128m -Xms64m"
         env["JAVA_TOOL_OPTIONS"] = "-Xmx128m -Xms64m"
@@ -834,30 +835,62 @@ class ProjectRunnerService:
             has_boot_plugin = "spring-boot-maven-plugin" in pom_content.lower()
             main_class = self._find_main_class_name(run_dir)
             is_war = "<packaging>war</packaging>" in pom_content.lower()
-            
             if is_war and not main_class:
                 self.add_log(repo_name, "[Run Strategy] Detected WAR packaging without main class. Using jetty:run.")
                 run_cmd = f'"{mvn_cmd}" jetty:run -Djetty.http.port={port} -Dcheckstyle.skip=true'
-            elif has_boot_parent or has_boot_plugin:
-                # Genuine Spring Boot project - use spring-boot:run
-                run_cmd = f'"{mvn_cmd}" spring-boot:run -Dspring-boot.run.profiles=migration -Dcheckstyle.skip=true -DskipTests'
             else:
-                # Not a Spring Boot parent project - find main class and use exec:java
-                self.add_log(repo_name, "[Run Strategy] No spring-boot-starter-parent found. Using exec:java strategy.")
-                if main_class:
-                    self.add_log(repo_name, f"[Run Strategy] Detected main class: {main_class}")
-                    run_cmd = (
-                        f'"{mvn_cmd}" compile exec:java '
-                        f'-Dexec.mainClass="{main_class}" '
-                        f'-Dexec.args="--server.port={port} --spring.profiles.active=migration" '
-                        f'-DskipTests=true'
-                    )
+                # Compile first using Maven, then launch via java -jar (saves dual JVM memory overhead)
+                self.add_log(repo_name, ">>> [Phase 1/2] Compiling and packaging Java application (Maven)...")
+                build_cmd = f'"{mvn_cmd}" clean package -DskipTests=true'
+                self.add_log(repo_name, f"Executing: {build_cmd}\n")
+                
+                build_process = await asyncio.create_subprocess_shell(
+                    build_cmd,
+                    cwd=str(run_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env=env
+                )
+                
+                async def stream_build_logs():
+                    async for line in build_process.stdout:
+                        self.add_log(repo_name, line.decode('utf-8', errors='replace'))
+                
+                await asyncio.gather(stream_build_logs(), build_process.wait())
+                
+                if build_process.returncode != 0:
+                    self.runs[repo_name]["status"] = "FAILED"
+                    self.runs[repo_name]["error_reason"] = f"Compilation failed with exit code {build_process.returncode}."
+                    self.add_log(repo_name, f"\nError: Compilation failed with exit code {build_process.returncode}")
+                    return
+                
+                # Locate JAR
+                target_dir = run_dir / "target"
+                jar_path = None
+                if target_dir.exists():
+                    jars = [f for f in target_dir.glob("*.jar") if not f.name.endswith(".original") and not f.name.endswith("-sources.jar")]
+                    if jars:
+                        jars.sort(key=lambda x: x.stat().st_size, reverse=True)
+                        jar_path = str(jars[0].relative_to(run_dir))
+                
+                if not jar_path:
+                    if main_class:
+                        self.add_log(repo_name, "[Run Strategy] No JAR found. Falling back to exec:java.")
+                        run_cmd = (
+                            f'"{mvn_cmd}" exec:java '
+                            f'-Dexec.mainClass="{main_class}" '
+                            f'-Dexec.args="--server.port={port} --spring.profiles.active=migration" '
+                            f'-DskipTests=true'
+                        )
+                    else:
+                        self.runs[repo_name]["status"] = "FAILED"
+                        self.runs[repo_name]["error_reason"] = "Could not locate compiled JAR file in target/ directory."
+                        self.add_log(repo_name, "\nError: Could not locate compiled JAR file in target/ directory.")
+                        return
                 else:
-                    # Last resort: try spring-boot:run anyway (plugin was injected)
-                    self.add_log(repo_name, "[Run Strategy] Could not detect main class. Attempting spring-boot:run anyway.")
-                    run_cmd = f'"{mvn_cmd}" spring-boot:run -Dspring-boot.run.profiles=migration'
-
-
+                    self.add_log(repo_name, f"\n>>> [Phase 2/2] Launching application JAR: {jar_path} ...\n")
+                    run_cmd = f'java -jar "{jar_path}" --server.port={port} --spring.profiles.active=migration'
+ 
         elif project_type == "Spring Boot / Gradle":
             gradle_cmd = "gradlew.bat" if is_windows else "./gradlew"
             wrapper = run_dir / ("gradlew.bat" if is_windows else "gradlew")
@@ -866,8 +899,47 @@ class ProjectRunnerService:
             else:
                 gradle_cmd = str(wrapper)
             
-            # Use args for Gradle profile activation
-            run_cmd = f'{gradle_cmd} bootRun --args="--spring.profiles.active=migration"'
+            self.add_log(repo_name, ">>> [Phase 1/2] Compiling and packaging Java application (Gradle)...")
+            build_cmd = f'{gradle_cmd} bootJar -x test'
+            self.add_log(repo_name, f"Executing: {build_cmd}\n")
+            
+            build_process = await asyncio.create_subprocess_shell(
+                build_cmd,
+                cwd=str(run_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env
+            )
+            
+            async def stream_build_logs():
+                async for line in build_process.stdout:
+                    self.add_log(repo_name, line.decode('utf-8', errors='replace'))
+            
+            await asyncio.gather(stream_build_logs(), build_process.wait())
+            
+            if build_process.returncode != 0:
+                self.runs[repo_name]["status"] = "FAILED"
+                self.runs[repo_name]["error_reason"] = f"Compilation failed with exit code {build_process.returncode}."
+                self.add_log(repo_name, f"\nError: Compilation failed with exit code {build_process.returncode}")
+                return
+                
+            # Locate JAR
+            libs_dir = run_dir / "build" / "libs"
+            jar_path = None
+            if libs_dir.exists():
+                jars = [f for f in libs_dir.glob("*.jar") if not f.name.endswith("-plain.jar") and not f.name.endswith("-sources.jar")]
+                if jars:
+                    jars.sort(key=lambda x: x.stat().st_size, reverse=True)
+                    jar_path = str(jars[0].relative_to(run_dir))
+            
+            if not jar_path:
+                self.runs[repo_name]["status"] = "FAILED"
+                self.runs[repo_name]["error_reason"] = "Could not locate compiled JAR file in build/libs/ directory."
+                self.add_log(repo_name, "\nError: Could not locate compiled JAR file in build/libs/ directory.")
+                return
+                
+            self.add_log(repo_name, f"\n>>> [Phase 2/2] Launching application JAR: {jar_path} ...\n")
+            run_cmd = f'java -jar "{jar_path}" --server.port={port} --spring.profiles.active=migration'
 
         elif project_type == "React / Vite":
             # Vite handles port through double dash or port argument
