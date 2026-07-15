@@ -109,24 +109,6 @@ export default function FunctionalTesting({
     window.open(`${API_BASE_URL}/migration/${repoName}/${framework}/report/download`, '_blank');
   };
 
-  if (!workflowState?.runnerCompleted) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] text-center animate-fadeIn">
-        <Lock size={48} className="text-slate-300 mb-4" />
-        <h2 className="text-xl font-bold text-slate-700 mb-2">Functional Testing Locked</h2>
-        <p className="text-slate-500 mb-6 max-w-md">
-          Complete Project Runner before accessing Functional Testing.
-        </p>
-        <button
-          onClick={() => setActiveTab('runner')}
-          className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
-        >
-          Go to Project Runner
-        </button>
-      </div>
-    );
-  }
-
   const isPlaywright = activeFramework === 'playwright';
   const activeResult = isPlaywright ? playwrightResult : seleniumResult;
   const activeLoading = isPlaywright ? playwrightLoading : seleniumLoading;

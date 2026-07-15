@@ -18,7 +18,7 @@ const T = {
   shadow:    '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
 };
 
-export default function Dashboard({ setActiveTab, setAnalysisRepoUrl, setAnalysisResult }) {
+export default function Dashboard({ setActiveTab, setAnalysisRepoUrl, setAnalysisResult, sessionId, setSessionId }) {
   const [repoUrl, setRepoUrl] = useState('');
   const [patToken, setPatToken] = useState('');
   const [validationState, setValidationState] = useState('initial'); // 'initial' | 'loading' | 'success' | 'error' | 'requires_auth'
@@ -70,10 +70,9 @@ export default function Dashboard({ setActiveTab, setAnalysisRepoUrl, setAnalysi
 
   const handleContinue = () => {
     if (isValidated) {
-      // Store in local storage for the next step
-      localStorage.setItem('last_analysis', JSON.stringify({ repoUrl, githubToken: patToken }));
       if (setAnalysisRepoUrl) setAnalysisRepoUrl(repoUrl);
       if (setAnalysisResult) setAnalysisResult(null);
+      if (setSessionId) setSessionId(null);
       setActiveTab('discovery');
     }
   };

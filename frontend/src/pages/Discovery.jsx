@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { GitBranch, Play, CheckCircle, AlertTriangle, ShieldAlert, BookOpen, ArrowRight, Shield, Code, Server, Zap, Search, Activity, Package, List, Database, Globe, Layers, FlaskConical, Folder, FolderOpen, File, FileText, FileCode, FileImage, FileArchive, ChevronRight, ChevronDown, Terminal, Loader2 } from 'lucide-react';
-import { analyzeRepository, getPlaywrightStatus, getRepositoryTree, getRepositoryFileContent } from '../api';
+import { analyzeRepository, getPlaywrightStatus, getRepositoryTree, getRepositoryFileContent, startProject } from '../api';
+import ProjectRunner from './ProjectRunner';
 import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
 import 'react-circular-progressbar/dist/styles.css';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
@@ -78,7 +79,7 @@ const TreeNode = ({ node, level = 0, onSelectFile, selectedPath }) => {
   );
 };
 
-export default function Discovery({ 
+ export default function Discovery({ 
  setActiveTab, 
  repoUrl, 
  setRepoUrl, 
@@ -94,14 +95,18 @@ export default function Discovery({
  timeTaken,
  setTimeTaken,
  workflowState,
- setWorkflowState
+ setWorkflowState,
+ sessionId,
+ setSessionId
 }) {
  const hasAutoTriggeredRef = React.useRef(false);
  const [viewMode, setViewMode] = useState('overview');
+ const [activeSummaryTab, setActiveSummaryTab] = useState('brd');
  const [playwrightStatus, setPlaywrightStatus] = useState(null);
   const [treeData, setTreeData] = useState(null);
   const [treeLoading, setTreeLoading] = useState(false);
   const [treeError, setTreeError] = useState(null);
+  const [autoRunError, setAutoRunError] = useState(null);
   
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileContent, setFileContent] = useState(null);
@@ -183,18 +188,76 @@ export default function Discovery({
  }
  };
 
+ const handleDownloadApiTests = async () => {
+   setIsDownloadingApiTests(true);
+   try {
+     const targetRepo = sourceType === 'remote' ? repoUrl : localPath;
+     if (!targetRepo) return;
+     const repoName = targetRepo.split('/').pop().replace('.git', '');
+     
+     const response = await fetch(`http://localhost:8000/api/reports/api-test-cases/download/${encodeURIComponent(repoName)}`);
+     if (!response.ok) throw new Error('Failed to download API test cases');
+     const blob = await response.blob();
+     const url = window.URL.createObjectURL(blob);
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = `api-functional-test-scope-${repoName}.html`;
+     document.body.appendChild(a);
+     a.click();
+     window.URL.revokeObjectURL(url);
+     document.body.removeChild(a);
+   } catch (err) {
+     console.error(err);
+     alert('Error downloading API Test Cases');
+   } finally {
+     setIsDownloadingApiTests(false);
+   }
+ };
+
+ const handleDownloadUiTests = async () => {
+   setIsDownloadingUiTests(true);
+   try {
+     const targetRepo = sourceType === 'remote' ? repoUrl : localPath;
+     if (!targetRepo) return;
+     const repoName = targetRepo.split('/').pop().replace('.git', '');
+     
+     const response = await fetch(`http://localhost:8000/api/reports/ui-functional-test/download/${encodeURIComponent(repoName)}`);
+     if (!response.ok) throw new Error('Failed to download UI test cases');
+     const blob = await response.blob();
+     const url = window.URL.createObjectURL(blob);
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = `ui-functional-test-scope-${repoName}.html`;
+     document.body.appendChild(a);
+     a.click();
+     window.URL.revokeObjectURL(url);
+     document.body.removeChild(a);
+   } catch (err) {
+     console.error(err);
+     alert('Error downloading UI Test Cases');
+   } finally {
+     setIsDownloadingUiTests(false);
+   }
+ };
+
  
   React.useEffect(() => {
-    if (result?.projectType && repoUrl) {
-      const repoName = repoUrl.split('/').pop().replace('.git', '');
+    const targetRepo = sourceType === 'remote' ? repoUrl : localPath;
+    if (result?.projectType && targetRepo) {
+      const repoName = targetRepo.split('/').pop().replace('.git', '');
       getPlaywrightStatus(repoName).then(pwStatus => {
         setPlaywrightStatus(pwStatus);
       }).catch(err => {
         // Optional
       });
       fetchTreeData(repoName);
+      
+      // Ensure the project is running in the background if we loaded from cache
+      startProject(repoName).catch(runErr => {
+        setAutoRunError(runErr.response?.data?.message || runErr.message || 'Failed to automatically start the project in the background.');
+      });
     }
-  }, [result, repoUrl]);
+  }, [result, repoUrl, localPath, sourceType]);
 
 
  const handleAnalyze = async (e) => {
@@ -219,7 +282,8 @@ export default function Discovery({
  const data = await analyzeRepository(
  sourceType === 'remote' ? repoUrl : '', 
  sourceType === 'remote' ? githubToken : '', 
- sourceType === 'local' ? localPath : ''
+ sourceType === 'local' ? localPath : '',
+ sessionId
  );
  clearTimeout(timer);
  clearTimeout(timer2);
@@ -234,18 +298,19 @@ export default function Discovery({
  } else {
  
       setResult(data);
-      if (repoUrl) {
-         fetchTreeData(repoUrl.split('/').pop().replace('.git', ''));
+      if (setSessionId && data.sessionId) setSessionId(data.sessionId);
+      
+      const targetRepo = sourceType === 'remote' ? repoUrl : localPath;
+      if (targetRepo) {
+         const repoNameExtracted = targetRepo.split('/').pop().replace('.git', '');
+         fetchTreeData(repoNameExtracted);
+         // Automatically start the project runner in the background
+         startProject(repoNameExtracted).catch(runErr => {
+           setAutoRunError(runErr.response?.data?.message || runErr.message || 'Failed to automatically start the project in the background.');
+         });
       }
 
  setTimeTaken(duration);
- 
- localStorage.setItem('last_analysis', JSON.stringify(data));
- localStorage.setItem('last_analysis_time', JSON.stringify(duration));
- 
- const stats = JSON.parse(localStorage.getItem('assistant_stats') || '{"reposAnalyzed":0,"migrationsRun":0,"filesConverted":0}');
- stats.reposAnalyzed += 1;
- localStorage.setItem('assistant_stats', JSON.stringify(stats));
 
  // Detect Playwright in the cloned project workspace (best-effort)
  try {
@@ -925,11 +990,21 @@ export default function Discovery({
  >
  Graphical View
  </button>
+ <button
+ onClick={() => setViewMode('runner')}
+ className={`px-5 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${
+ viewMode === 'runner' 
+ ? 'bg-white text-brand-600 shadow-card' 
+ : 'text-[#667085] hover:text-[#344054] :text-slate-300'
+ }`}
+ >
+ Project Runner
+ </button>
  </div>
 
  {/* Error State */}
  {error && (
- <div className="p-5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 glass-card flex gap-3 items-start">
+ <div className="p-5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 glass-card flex gap-3 items-start mt-4">
  <ShieldAlert size={24} className="flex-shrink-0" />
  <div>
  <h4 className="font-bold text-sm">Analysis Failed</h4>
@@ -938,8 +1013,29 @@ export default function Discovery({
  </div>
  )}
 
+ {/* Auto Run Error State */}
+ {autoRunError && (
+ <div className="p-5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-700 glass-card flex gap-3 items-start mt-4">
+ <ShieldAlert size={24} className="flex-shrink-0" />
+ <div>
+ <h4 className="font-bold text-sm">Background Run Failed</h4>
+ <p className="mt-1 text-xs leading-relaxed">{autoRunError}</p>
+ </div>
+ </div>
+ )}
+
  {/* Views */}
- {viewMode === 'graphical' ? renderGraphicalView() : (
+ {viewMode === 'runner' ? (
+   <ProjectRunner
+     setActiveTab={setActiveTab}
+     analysisResult={result}
+     repoUrl={repoUrl}
+     setRepoUrl={setRepoUrl}
+     result={result}
+     workflowState={workflowState}
+     setWorkflowState={setWorkflowState}
+   />
+ ) : viewMode === 'graphical' ? renderGraphicalView() : (
  // OVERVIEW UI (Old content)
  result?.projectType && (
  <div className="space-y-8 animate-fadeIn">
@@ -1044,24 +1140,56 @@ export default function Discovery({
   </div>
  <div className="lg:col-span-2">
  <div className="p-6 glass-card flex flex-col lg:h-[720px]">
- <div className="flex justify-between items-center mb-6 shrink-0">
- <h3 className="text-md font-bold text-[#101828] flex items-center gap-2">
- <BookOpen className="text-indigo-500" size={18} />
- BRD Report Summary
- </h3>
+ <div className="flex justify-between items-center mb-6 shrink-0 border-b border-[#EAECF0] pb-4">
+ <div className="flex gap-4">
+   <button
+     onClick={() => setActiveSummaryTab('brd')}
+     className={`flex items-center gap-2 text-md font-bold transition-all px-2 py-1 rounded-lg ${activeSummaryTab === 'brd' ? 'text-indigo-600 bg-indigo-50' : 'text-[#667085] hover:text-indigo-500'}`}
+   >
+     <BookOpen size={18} />
+     BRD Report Summary
+   </button>
+   <button
+     onClick={() => setActiveSummaryTab('functional')}
+     className={`flex items-center gap-2 text-md font-bold transition-all px-2 py-1 rounded-lg ${activeSummaryTab === 'functional' ? 'text-emerald-600 bg-emerald-50' : 'text-[#667085] hover:text-emerald-500'}`}
+   >
+     <CheckCircle size={18} />
+     Functional Testing Summary
+   </button>
+ </div>
  <div className="flex items-center gap-3">
- <button
- onClick={handleDownloadBrd}
- disabled={isDownloadingBrd || !result.fullBrdReport}
- className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-card transition-all"
- >
- {isDownloadingBrd || !result.fullBrdReport ? 'Generating...' : 'Download BRD Report'}
- </button>
+   {activeSummaryTab === 'brd' ? (
+     <button
+       onClick={handleDownloadBrd}
+       disabled={isDownloadingBrd || !result.fullBrdReport}
+       className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-card transition-all"
+     >
+       {isDownloadingBrd || !result.fullBrdReport ? 'Generating...' : 'Download BRD Report'}
+     </button>
+   ) : (
+     <div className="flex items-center gap-2">
+       <button
+         onClick={handleDownloadApiTests}
+         disabled={isDownloadingApiTests || !result.endpointCount}
+         className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-card transition-all"
+       >
+         {isDownloadingApiTests ? 'Generating...' : 'Download API Tests'}
+       </button>
+       <button
+         onClick={handleDownloadUiTests}
+         disabled={isDownloadingUiTests || !result.hasFrontend}
+         className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl shadow-card transition-all"
+       >
+         {isDownloadingUiTests ? 'Generating...' : 'Download UI Tests'}
+       </button>
+     </div>
+   )}
  </div>
  </div>
  
- {result.fullBrdReport ? (
- <div className="relative flex-1 min-h-[300px] overflow-y-auto pr-2">
+ {activeSummaryTab === 'brd' ? (
+   result.fullBrdReport ? (
+ <div className="relative flex-1 min-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
  <div className="space-y-6 text-sm text-[#344054]">
  
  <div>
@@ -1118,12 +1246,7 @@ export default function Discovery({
  </ul>
  </div>
 
- <div>
- <h4 className="font-bold text-[#101828] mb-2">Testing & Comprehension Context</h4>
- <p className="leading-relaxed bg-indigo-50 text-indigo-800 p-3 rounded-xl border border-indigo-100">
- {result.fullBrdReport.modernizationContext}
- </p>
- </div>
+
 
  </div>
  </div>
@@ -1134,6 +1257,36 @@ export default function Discovery({
  <p>BRD Summary not available.</p>
  </div>
  </div>
+ )
+ ) : (
+   <div className="relative flex-1 min-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+     <div className="space-y-6 text-sm text-[#344054]">
+       <div>
+         <h4 className="font-bold text-[#101828] mb-2 flex items-center gap-2"><Server size={16} className="text-emerald-500" /> API Functional Testing Scope</h4>
+         <p className="leading-relaxed bg-emerald-50 p-4 rounded-xl border border-emerald-100 text-emerald-800">
+           {result.endpointCount > 0 
+             ? `Detected ${result.endpointCount} REST API endpoints. Automated functional tests will be generated for all detected endpoints to validate expected payloads, response codes, and integration boundary conditions.`
+             : 'No REST API endpoints detected in this project. API testing scope is empty.'}
+         </p>
+       </div>
+       <div>
+         <h4 className="font-bold text-[#101828] mb-2 flex items-center gap-2"><Globe size={16} className="text-emerald-500" /> UI Functional Testing Scope</h4>
+         <p className="leading-relaxed bg-emerald-50 p-4 rounded-xl border border-emerald-100 text-emerald-800">
+           {result.hasFrontend
+             ? `Frontend framework (${result.frontendFramework || 'HTML/JS'}) detected. Playwright UI functional testing scripts will be generated to validate user flows, interactions, and visual state.`
+             : 'No frontend components detected in this project. UI testing scope is empty.'}
+         </p>
+       </div>
+       <div className="bg-[#F7F8FC] p-4 rounded-xl border border-[#F2F4F7]">
+         <h4 className="font-bold text-[#101828] mb-2">Test Generation Strategy</h4>
+         <ul className="list-disc pl-5 space-y-1 text-xs text-[#475467]">
+           <li>Boundary Value Analysis and Equivalence Partitioning are applied to all identified parameters.</li>
+           <li>Positive and negative test cases generated based on business constraints.</li>
+           <li>State-dependent flows are ordered logically to prevent test dependency failures.</li>
+         </ul>
+       </div>
+     </div>
+   </div>
  )}
  
  </div>
@@ -1141,7 +1294,7 @@ export default function Discovery({
  </div>
  
  {/* ── CONTINUE TO PROJECT RUNNER ── */}
- {result?.projectType && (
+ {result?.projectType && viewMode !== 'runner' && (
  <div className="flex justify-end mt-8">
  <button
  onClick={() => {
@@ -1149,13 +1302,13 @@ export default function Discovery({
  if (typeof setWorkflowState === 'function') {
  setWorkflowState(prev => ({ ...prev, analysisCompleted: true }));
  }
- setActiveTab('runner');
+ setActiveTab('test-recommendation');
  }
  }}
  disabled={!result || loading || result.buildStatus === 'FAILED' || error}
  className="flex items-center gap-2 px-6 py-3 bg-[#5B5FF6] hover:bg-[#4F54D8] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-bold rounded-xl shadow-card transition-all"
  >
- Continue to Project Runner <ArrowRight size={18} />
+ Continue to Strategies <Play size={18} />
  </button>
  </div>
  )}

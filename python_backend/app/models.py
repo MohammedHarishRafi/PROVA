@@ -8,6 +8,7 @@ class AnalyzeRequest(BaseModel):
     apiKey: Optional[str] = None
     provider: Optional[str] = None
     modelName: Optional[str] = None
+    sessionId: Optional[str] = None
 
 class ValidateRepoRequest(BaseModel):
     repoUrl: str
@@ -71,6 +72,7 @@ class AnalysisResponse(BaseModel):
     fullBrdReport: Optional[FullBrdReport] = None
     errorMessage: Optional[str] = None
     usedProvider: Optional[str] = None
+    sessionId: Optional[str] = None
 
 class MigrationResponse(BaseModel):
     success: bool

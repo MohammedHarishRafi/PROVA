@@ -4,8 +4,7 @@ import {
   Shield, Code, Link, Cpu, BarChart, ExternalLink, Moon, Sun, 
   Settings as SettingsIcon, LogOut, Check, ChevronDown, Download, AlertCircle, X, CheckSquare, Sparkles, Server, Map, GitMerge, List, BookOpen, Key, Eye, Layout, File, Target, FlaskConical 
 } from 'lucide-react';
-import { getStatus, getWorkflowStatus } from './api';
-import { getLocalJSON } from './utils/localData';
+import { getStatus, getWorkflowStatus, getSession } from './api';
 import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
 import 'react-circular-progressbar/dist/styles.css';
 import { motion } from 'framer-motion';
@@ -61,56 +60,28 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [darkMode, setDarkMode] = useState(true);
 
-  // Helper to get from localstorage safely
-  const getLocalItem = (key, fallback) => {
-    try {
-      const item = localStorage.getItem(key);
-      return item ? JSON.parse(item) : fallback;
-    } catch (e) {
-      return fallback;
-    }
-  };
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionData, setSessionData] = useState(null);
 
   // Repository Analysis Page states
-  const [analysisResult, setAnalysisResult] = useState(() => getLocalItem('last_analysis', null));
-  const [analysisRepoUrl, setAnalysisRepoUrl] = useState(() => {
-    const last = getLocalItem('last_analysis', null);
-    return last ? last.repoUrl : '';
-  });
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [analysisRepoUrl, setAnalysisRepoUrl] = useState('');
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisStatusText, setAnalysisStatusText] = useState('');
   const [analysisElapsedTime, setAnalysisElapsedTime] = useState(0);
-  const [analysisTimeTaken, setAnalysisTimeTaken] = useState(() => getLocalItem('last_analysis_time', null));
-
-  // Ticking effect for repository analysis loading timer
-  useEffect(() => {
-    let intervalId;
-    if (analysisLoading) {
-      const startTime = Date.now();
-      setAnalysisElapsedTime(0);
-      intervalId = setInterval(() => {
-        setAnalysisElapsedTime(((Date.now() - startTime) / 1000).toFixed(1));
-      }, 100);
-    }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [analysisLoading]);
+  const [analysisTimeTaken, setAnalysisTimeTaken] = useState(null);
 
   // Migration Center Page states
-  const [migrationResult, setMigrationResult] = useState(() => getLocalItem('last_migration', null));
-  const [migrationRepoUrl, setMigrationRepoUrl] = useState(() => {
-    const last = getLocalItem('last_analysis', null);
-    return last ? last.repoUrl : '';
-  });
+  const [migrationResult, setMigrationResult] = useState(null);
+  const [migrationRepoUrl, setMigrationRepoUrl] = useState('');
   const [migrationTargetVersion, setMigrationTargetVersion] = useState('21');
   const [migrationLoading, setMigrationLoading] = useState(false);
   const [migrationError, setMigrationError] = useState(null);
   const [migrationStatusText, setMigrationStatusText] = useState('');
-  const [migrationHistory, setMigrationHistory] = useState(() => getLocalItem('migration_history', []));
+  const [migrationHistory, setMigrationHistory] = useState([]);
   const [migrationElapsedTime, setMigrationElapsedTime] = useState(0);
-  const [migrationTimeTaken, setMigrationTimeTaken] = useState(() => getLocalItem('last_migration_time', null));
+  const [migrationTimeTaken, setMigrationTimeTaken] = useState(null);
 
   // Ticking effect for migration loading timer
   useEffect(() => {
@@ -150,13 +121,32 @@ export default function App() {
 
   const [workflowState, setWorkflowState] = useState({ analysisCompleted: false, runnerCompleted: false });
 
+  // Session Hydration
   useEffect(() => {
-    // Load stats and history for KPI cards
-    const localStats = getLocalJSON('assistant_stats', { reposAnalyzed: 0, migrationsRun: 0, filesConverted: 0 });
-    setStats(localStats);
-    const history = getLocalJSON('migration_history', []);
-    setMigrations(history);
+    if (!sessionId) return;
+    getSession(sessionId).then(data => {
+      if (data) {
+        setSessionData(data);
+        if (data.analysisResult) setAnalysisResult(data.analysisResult);
+        if (data.repoUrl) {
+          setAnalysisRepoUrl(data.repoUrl);
+          setMigrationRepoUrl(data.repoUrl);
+        }
+        if (data.workflowState) {
+          setWorkflowState(prev => ({
+             ...prev, 
+             analysisCompleted: data.workflowState.analysisCompleted || prev.analysisCompleted,
+             runnerCompleted: data.workflowState.runnerCompleted || prev.runnerCompleted
+          }));
+        }
+        if (data.migrationResult) setMigrationResult(data.migrationResult);
+        if (data.stats) setStats(data.stats);
+        if (data.migrations) setMigrations(data.migrations);
+      }
+    }).catch(console.error);
+  }, [sessionId, activeTab]);
 
+  useEffect(() => {
     const fetchStatus = () => {
       getStatus()
         .then(data => setStatus(data))
@@ -212,24 +202,27 @@ export default function App() {
   const wizardNodes = [
     { id: 'dashboard', label: 'Connect', icon: <Home size={18} /> },
     { id: 'discovery', label: 'Discovery', icon: <Search size={18} /> },
-    { id: 'runner', label: 'Project Runner', icon: <RefreshCw size={18} /> },
-    { id: 'test-recommendation', label: 'AI Test Recommendation', icon: <FlaskConical size={18} /> },
+    { id: 'test-recommendation', label: 'Strategies', icon: <FlaskConical size={18} /> },
     { id: 'results', label: 'Testing', icon: <Layers size={18} /> },
     { id: 'summary', label: 'Summary', icon: <FileText size={18} /> }
   ];
 
   const renderContent = () => {
-    switch (activeTab) {
-      case 'dashboard':
-        return <Dashboard 
-          setActiveTab={setActiveTab} 
-          setAnalysisRepoUrl={setAnalysisRepoUrl}
-          setAnalysisResult={setAnalysisResult}
-        />;
-      case 'settings':
-        return <Settings />;
-      case 'discovery':
-        return (
+    return (
+      <>
+        <div className={activeTab === 'dashboard' ? 'block h-full w-full' : 'hidden'}>
+          <Dashboard 
+            setActiveTab={setActiveTab} 
+            setAnalysisRepoUrl={setAnalysisRepoUrl}
+            setAnalysisResult={setAnalysisResult}
+            sessionId={sessionId}
+            setSessionId={setSessionId}
+          />
+        </div>
+        <div className={activeTab === 'settings' ? 'block h-full w-full' : 'hidden'}>
+          <Settings />
+        </div>
+        <div className={activeTab === 'discovery' ? 'block h-full w-full' : 'hidden'}>
           <Discovery
             setActiveTab={setActiveTab}
             repoUrl={analysisRepoUrl}
@@ -247,47 +240,21 @@ export default function App() {
             setTimeTaken={setAnalysisTimeTaken}
             workflowState={workflowState}
             setWorkflowState={setWorkflowState}
+            sessionId={sessionId}
+            setSessionId={setSessionId}
           />
-        );
-      case 'runner':
-        return (
-          <ProjectRunner
-            setActiveTab={setActiveTab}
-            analysisResult={analysisResult}
-            repoUrl={migrationRepoUrl}
-            setRepoUrl={setMigrationRepoUrl}
-            targetVersion={migrationTargetVersion}
-            setTargetVersion={setMigrationTargetVersion}
-            loading={migrationLoading}
-            setLoading={setMigrationLoading}
-            result={migrationResult}
-            setResult={setMigrationResult}
-            error={migrationError}
-            setError={setMigrationError}
-            statusText={migrationStatusText}
-            setStatusText={setMigrationStatusText}
-            history={migrationHistory}
-            setHistory={setMigrationHistory}
-            elapsedTime={migrationElapsedTime}
-            timeTaken={migrationTimeTaken}
-            setTimeTaken={setMigrationTimeTaken}
-            workflowState={workflowState}
-            setWorkflowState={setWorkflowState}
-          />
-        );
-      case 'test-recommendation':
-        return (
+        </div>
+        <div className={activeTab === 'test-recommendation' ? 'block h-full w-full' : 'hidden'}>
           <AITestRecommendation
             setActiveTab={setActiveTab}
             repoUrl={migrationRepoUrl}
             workflowState={workflowState}
             setWorkflowState={setWorkflowState}
             analysisResult={analysisResult}
+            sessionId={sessionId}
           />
-        );
-      case 'results':
-      case 'testing':
-        return (
+        </div>
+        <div className={(activeTab === 'results' || activeTab === 'testing') ? 'block h-full w-full' : 'hidden'}>
           <FunctionalTesting
             setActiveTab={setActiveTab}
             repoUrl={migrationRepoUrl}
@@ -295,13 +262,14 @@ export default function App() {
             result={migrationResult}
             workflowState={workflowState}
             setWorkflowState={setWorkflowState}
+            sessionId={sessionId}
           />
-        );
-      case 'summary':
-        return <Summary repoUrl={analysisRepoUrl || migrationRepoUrl} />;
-      default:
-        return <Dashboard setActiveTab={setActiveTab} />;
-    }
+        </div>
+        <div className={activeTab === 'summary' ? 'block h-full w-full' : 'hidden'}>
+          <Summary repoUrl={analysisRepoUrl || migrationRepoUrl} sessionId={sessionId} />
+        </div>
+      </>
+    );
   };
 
   if (!isLoggedIn) {
@@ -366,12 +334,9 @@ export default function App() {
                 const isPending = index > currentIndex;
                 let isLocked = false;
                 let lockedReason = '';
-                if (node.id === 'runner' && !workflowState.analysisCompleted) {
+                if ((node.id === 'test-recommendation' || node.id === 'results') && !workflowState.analysisCompleted) {
                   isLocked = true;
-                  lockedReason = 'Complete Repository Analysis before accessing Project Runner.';
-                } else if ((node.id === 'test-recommendation' || node.id === 'results') && !workflowState.runnerCompleted) {
-                  isLocked = true;
-                  lockedReason = 'Complete Project Runner before accessing AI Test Recommendation.';
+                  lockedReason = 'Complete Repository Analysis before accessing Strategies.';
                 }
                 
                 let nodeStyle = {};
