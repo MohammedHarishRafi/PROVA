@@ -64,12 +64,14 @@ export default function FunctionalTesting({ setActiveTab, repoUrl, result, workf
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Pass vs Fail Donut Chart */}
-        <div className="bg-white rounded-3xl p-8 shadow-sm border border-[#EAECF0] flex flex-col items-center justify-center">
-          <h2 className="text-md font-bold text-[#101828] mb-6 self-start w-full text-left">Pass vs Fail Rate</h2>
-          <div className="relative w-40 h-40 mb-6">
+        <div className="bg-white rounded-3xl p-8 shadow-sm border border-[#EAECF0] flex flex-col items-center justify-center relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-emerald-500/5 to-transparent rounded-bl-full -z-0"></div>
+          
+          <h2 className="text-md font-bold text-[#101828] mb-6 self-start w-full text-left relative z-10">Pass vs Fail Rate</h2>
+          <div className="relative w-44 h-44 mb-8 z-10 drop-shadow-md">
             <CircularProgressbar
               value={passRate}
-              strokeWidth={12}
+              strokeWidth={14}
               styles={buildStyles({
                 pathColor: '#12B76A',
                 trailColor: '#F04438',
@@ -77,68 +79,97 @@ export default function FunctionalTesting({ setActiveTab, repoUrl, result, workf
               })}
             />
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-3xl font-black text-[#101828]">{passRate}%</span>
-              <span className="text-xs font-bold text-[#667085] uppercase">Pass Rate</span>
+              <span className="text-4xl font-black text-[#101828]">{passRate}%</span>
+              <span className="text-[10px] font-bold text-[#667085] uppercase tracking-wider mt-1">Pass Rate</span>
             </div>
           </div>
-          <div className="flex justify-between w-full mt-4">
-            <div className="flex flex-col items-center">
-              <div className="flex items-center gap-2 text-emerald-600 font-bold mb-1">
-                <CheckCircle2 size={16} /> Passed
+          <div className="flex justify-between w-full mt-auto relative z-10 px-4">
+            <div className="flex flex-col items-center bg-emerald-50/50 px-6 py-3 rounded-2xl border border-emerald-50">
+              <div className="flex items-center gap-1.5 text-emerald-600 font-bold mb-1 text-xs uppercase tracking-wide">
+                <CheckCircle2 size={14} /> Passed
               </div>
-              <span className="text-2xl font-black text-[#101828]">{passedTests}</span>
+              <span className="text-3xl font-black text-[#101828]">{passedTests}</span>
             </div>
-            <div className="flex flex-col items-center">
-              <div className="flex items-center gap-2 text-rose-600 font-bold mb-1">
-                <XCircle size={16} /> Failed
+            <div className="flex flex-col items-center bg-rose-50/50 px-6 py-3 rounded-2xl border border-rose-50">
+              <div className="flex items-center gap-1.5 text-rose-600 font-bold mb-1 text-xs uppercase tracking-wide">
+                <XCircle size={14} /> Failed
               </div>
-              <span className="text-2xl font-black text-[#101828]">{failedTests}</span>
+              <span className="text-3xl font-black text-[#101828]">{failedTests}</span>
             </div>
           </div>
         </div>
 
-        {/* Execution Time Bar Chart Placeholder */}
+        {/* Execution Time Bar Chart */}
         <div className="lg:col-span-2 bg-white rounded-3xl p-8 shadow-sm border border-[#EAECF0] flex flex-col">
-          <h2 className="text-md font-bold text-[#101828] mb-6">Execution Time by Module</h2>
-          <div className="flex-1 flex items-end gap-6 relative pt-10 pb-6 border-b border-[#EAECF0] px-4">
+          <h2 className="text-md font-bold text-[#101828] mb-8">Execution Time by Module</h2>
+          
+          <div className="flex-1 flex items-end gap-6 relative pt-8 pb-6 border-b border-[#EAECF0] px-2 h-[300px]">
             
-            {/* Y Axis labels */}
-            <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between text-[10px] text-[#98A2B3] font-bold py-6 pr-2 border-r border-[#EAECF0]">
-              <span>4.0s</span>
-              <span>3.0s</span>
-              <span>2.0s</span>
-              <span>1.0s</span>
-              <span>0.0s</span>
-            </div>
-
-            {/* Grid lines */}
-            <div className="absolute left-8 right-0 top-6 h-px bg-[#F2F4F7]"></div>
-            <div className="absolute left-8 right-0 top-[calc(25%+6px)] h-px bg-[#F2F4F7]"></div>
-            <div className="absolute left-8 right-0 top-[calc(50%+6px)] h-px bg-[#F2F4F7]"></div>
-            <div className="absolute left-8 right-0 top-[calc(75%+6px)] h-px bg-[#F2F4F7]"></div>
-
-            {/* Bars */}
-            {testResults.map((result, idx) => {
-              const maxTime = Math.max(...testResults.map(r => r.rawTime || 4000), 4000);
-              const heightPercent = Math.min(((result.rawTime || 0) / maxTime) * 100, 100);
-              const bgColor = result.status === 'Failed' ? 'bg-[#F04438] hover:bg-[#d92d20]' : 'bg-[#5B5FF6] hover:bg-[#4f53dc]';
-              
-              // Extract a short label
-              const shortLabel = result.module.split(' ')[0] || `Test ${idx+1}`;
-
-              return (
-                <div key={result.id || idx} className={`flex-1 flex flex-col items-center gap-3 relative z-10 ${idx === 0 ? 'ml-8' : ''}`}>
-                  <div className={`w-12 ${bgColor} rounded-t-lg transition-all shadow-sm relative group`} style={{ height: `${heightPercent}%`, minHeight: '4px' }}>
-                    <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-[#101828] text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">{result.time}</div>
+            {(() => {
+              if (!testResults || testResults.length === 0) {
+                return (
+                  <div className="absolute inset-0 flex items-center justify-center text-[#667085] text-sm font-medium">
+                    No data to visualize. Run tests first.
                   </div>
-                  <span className="text-[10px] font-bold text-[#667085] text-center w-full truncate" title={result.module}>{shortLabel}</span>
-                </div>
+                );
+              }
+
+              const maxRaw = Math.max(...testResults.map(r => r.rawTime || 0), 100);
+              // Calculate a clean scale maximum (e.g. 500ms, 1000ms, 2000ms, etc.)
+              let maxScale = 100;
+              while (maxScale < maxRaw) {
+                if (maxScale < 1000) maxScale += 100;
+                else if (maxScale < 5000) maxScale += 500;
+                else maxScale += 1000;
+              }
+              
+              return (
+                <>
+                  {/* Y Axis labels */}
+                  <div className="absolute left-0 top-0 bottom-6 flex flex-col justify-between text-[10px] text-[#98A2B3] font-bold py-1 pr-4 border-r border-[#EAECF0] h-[calc(100%-24px)] min-w-[45px] text-right bg-white z-20">
+                    <span>{(maxScale / 1000).toFixed(1)}s</span>
+                    <span>{(maxScale * 0.75 / 1000).toFixed(1)}s</span>
+                    <span>{(maxScale * 0.5 / 1000).toFixed(1)}s</span>
+                    <span>{(maxScale * 0.25 / 1000).toFixed(1)}s</span>
+                    <span>0.0s</span>
+                  </div>
+
+                  {/* Grid lines */}
+                  <div className="absolute left-[45px] right-0 top-1 h-px bg-[#F2F4F7] z-0"></div>
+                  <div className="absolute left-[45px] right-0 top-[calc(25%+1px)] h-px bg-[#F2F4F7] z-0"></div>
+                  <div className="absolute left-[45px] right-0 top-[calc(50%+1px)] h-px bg-[#F2F4F7] z-0"></div>
+                  <div className="absolute left-[45px] right-0 top-[calc(75%+1px)] h-px bg-[#F2F4F7] z-0"></div>
+
+                  {/* Bars */}
+                  {testResults.map((result, idx) => {
+                    const heightPercent = Math.max(Math.min(((result.rawTime || 0) / maxScale) * 100, 100), 2);
+                    const isFailed = result.status === 'Failed';
+                    const gradientClass = isFailed ? 'from-rose-500 to-rose-400' : 'from-[#5B5FF6] to-[#8184fa]';
+                    const shadowClass = isFailed ? 'shadow-[0_8px_20px_rgba(244,63,94,0.3)]' : 'shadow-[0_8px_20px_rgba(91,95,246,0.3)]';
+                    
+                    const shortLabel = result.module.split(' ').slice(0, 2).join(' ') || `Test ${idx+1}`;
+
+                    return (
+                      <div key={result.id || idx} className={`flex-1 flex flex-col items-center gap-4 relative z-10 ${idx === 0 ? 'ml-[45px]' : ''} group h-full justify-end`}>
+                        
+                        <div 
+                          className={`w-full max-w-[64px] bg-gradient-to-t ${gradientClass} rounded-t-xl transition-all duration-500 ${shadowClass} relative cursor-pointer hover:opacity-90 group-hover:scale-y-[1.02] transform origin-bottom`} 
+                          style={{ height: `${heightPercent}%` }}
+                        >
+                          <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-[#101828] text-white text-xs font-bold px-3 py-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-20 pointer-events-none drop-shadow-lg after:content-[''] after:absolute after:top-full after:left-1/2 after:-translate-x-1/2 after:border-[5px] after:border-transparent after:border-t-[#101828]">
+                            {result.time}
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold text-[#667085] text-center w-full truncate px-1 uppercase tracking-wider" title={result.module}>{shortLabel}</span>
+                      </div>
+                    );
+                  })}
+                </>
               );
-            })}
+            })()}
             
           </div>
         </div>
-
       </div>
 
       {/* Test Execution Results Table */}
@@ -183,7 +214,7 @@ export default function FunctionalTesting({ setActiveTab, repoUrl, result, workf
               )) : (
                 <tr>
                   <td colSpan="4" className="py-8 text-center text-sm font-medium text-[#667085]">
-                    No test results available.
+                    No test results available. Click "Run Automated Tests" to execute.
                   </td>
                 </tr>
               )}

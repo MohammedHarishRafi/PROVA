@@ -33,18 +33,18 @@ export default function Summary({ repoUrl }) {
     if (!repoName) return;
     setLoading(true);
     let url = '';
-    switch(type) {
+    switch (type) {
       case 'brd':
-        url = `http://localhost:8000/api/brd/download/${encodeURIComponent(repoUrl)}`;
+        url = `${API_BASE_URL}/brd/download/${encodeURIComponent(repoName)}`;
         break;
       case 'report':
         url = `${API_BASE_URL}/migration/${repoName}/playwright/report/download`;
         break;
       case 'api-tests':
-        url = `http://localhost:8000/api/reports/api-test-cases/download/${encodeURIComponent(repoUrl)}`;
+        url = `${API_BASE_URL}/reports/api-test-cases/download/${encodeURIComponent(repoName)}`;
         break;
       case 'ui-tests':
-        url = `http://localhost:8000/api/reports/ui-functional-test/download/${encodeURIComponent(repoUrl)}`;
+        url = `${API_BASE_URL}/reports/ui-functional-test/download/${encodeURIComponent(repoName)}`;
         break;
       default:
         break;

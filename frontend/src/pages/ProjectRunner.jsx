@@ -4,6 +4,8 @@ import {
   User, Check, Clock, Globe, Monitor, Terminal, Activity, Link, RefreshCcw
 } from 'lucide-react';
 import { getPlaywrightStatus, runPlaywrightTests, API_BASE_URL, getProjectStatus } from '../api';
+import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
+import 'react-circular-progressbar/dist/styles.css';
 
 export default function ProjectRunner({ 
   setActiveTab, 
@@ -16,24 +18,12 @@ export default function ProjectRunner({
   const [loading, setLoading] = useState(false);
   const [testData, setTestData] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [selectedTool, setSelectedTool] = useState(null);
   
   // Dynamic UI States
   const [currentLogs, setCurrentLogs] = useState([]);
   const [progressPercent, setProgressPercent] = useState(0);
   
-
-  const ALL_MOCK_LOGS = [
-    { time: '00:01', icon: <Terminal size={14} />, text: 'Starting test execution...', status: null },
-    { time: '00:03', icon: <Monitor size={14} />, text: 'Launching browser Chromium...', status: null },
-    { time: '00:05', icon: <Globe size={14} />, text: 'Navigating to application URL', status: 'Passed' },
-    { time: '00:08', icon: <CheckCircle size={14} className="text-emerald-500" />, text: '01-navigation.spec.ts: Homepage loads successfully without errors', status: 'Passed' },
-    { time: '00:10', icon: <Clock size={14} />, text: '01-navigation.spec.ts: Page title is populated', status: 'Passed' },
-    { time: '00:15', icon: <CheckCircle size={14} className="text-emerald-500" />, text: '04-ui-components.spec.ts: Component interactions do not produce console errors', status: 'Passed' },
-    { time: '00:20', icon: <CheckCircle size={14} className="text-emerald-500" />, text: '04-ui-components.spec.ts: Component performance loads within acceptable threshold', status: 'Passed' },
-    { time: '00:25', icon: <Activity size={14} className="text-rose-500" />, text: '05-business-flows.spec.ts: Executing core business flows...', status: 'Running' },
-    { time: '00:30', icon: <Terminal size={14} />, text: 'Test execution finalizing...', status: null },
-    { time: '00:35', icon: <Check size={14} className="text-emerald-500" />, text: 'Test execution complete! Generating HTML Report...', status: null }
-  ];
 
 
   // Polling for Playwright Status
@@ -45,7 +35,7 @@ export default function ProjectRunner({
           const data = await getPlaywrightStatus(repoName);
           setTestData(data);
           setStatus(data.status || 'IDLE');
-          if (data.status === 'ERROR' && data.errorMessage) {
+          if ((data.status === 'ERROR' || data.status === 'NOT_AVAILABLE') && data.errorMessage) {
             setErrorMsg(data.errorMessage);
           }
         } catch (e) {
@@ -59,33 +49,48 @@ export default function ProjectRunner({
     return () => clearInterval(interval);
   }, [repoName]);
 
-  // Simulation effect when running
+  // Actual data mapping effect when running or completed
   useEffect(() => {
     let timer;
     if (status === 'RUNNING') {
-      setCurrentLogs([]);
+      setCurrentLogs([
+        { time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), icon: <Activity size={14} className="text-[#5B5FF6] animate-pulse" />, text: 'Executing UI tests in background (please wait up to 30s)...', status: 'Running' }
+      ]);
       setProgressPercent(10);
-      let step = 0;
       timer = setInterval(() => {
-        step++;
-        if (step <= ALL_MOCK_LOGS.length) {
-          setCurrentLogs(ALL_MOCK_LOGS.slice(0, step));
-          setProgressPercent(Math.min(10 + (step * 8), 90));
-        }
-      }, 2000);
-    } else if (status === 'SUCCESS' || status === 'FAILED') {
-      // Completed, jump to end
-      const finalLogs = [...ALL_MOCK_LOGS];
-      finalLogs[7] = { ...finalLogs[7], status: 'Passed' }; // Mark the running one as passed
-      setCurrentLogs(finalLogs);
+        setProgressPercent(prev => Math.min(prev + 5, 95));
+      }, 3000);
+    } else if (status === 'SUCCESS' || status === 'FAILED' || status === 'PASSED') {
+      // Completed, map actual modules from testData
+      if (testData && testData.modules && testData.modules.length > 0) {
+        const actualLogs = testData.modules.map((m, idx) => ({
+          time: m.time,
+          icon: m.status === 'Passed' ? <CheckCircle size={14} className="text-emerald-500" /> : <XCircle size={14} className="text-rose-500" />,
+          text: m.module,
+          status: m.status === 'Passed' ? 'Passed' : 'Failed'
+        }));
+        
+        // Add a final completion log
+        actualLogs.push({ time: testData.executionTime || '0.0s', icon: <Check size={14} className="text-emerald-500" />, text: 'Test execution complete! View the HTML Report for details.', status: null });
+        setCurrentLogs(actualLogs);
+      } else {
+        setCurrentLogs([
+          { time: '00:00', icon: <Check size={14} className="text-emerald-500" />, text: 'Test execution complete! View the HTML Report for details.', status: null }
+        ]);
+      }
       setProgressPercent(100);
+    } else if (status === 'ERROR' || status === 'NOT_AVAILABLE') {
+      setCurrentLogs([
+        { time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), icon: <XCircle size={14} className="text-rose-500" />, text: 'Execution failed due to an error or missing configuration.', status: 'Failed' }
+      ]);
+      setProgressPercent(0);
     } else {
       setCurrentLogs([]);
       setProgressPercent(0);
     }
     
     return () => clearInterval(timer);
-  }, [status]);
+  }, [status, testData]);
 
   const handleStart = async () => {
     if (!repoName) return;
@@ -108,7 +113,7 @@ export default function ProjectRunner({
   };
 
   const isRunning = status === 'RUNNING';
-  const isCompleted = status === 'SUCCESS' || status === 'FAILED';
+  const isCompleted = status === 'SUCCESS' || status === 'FAILED' || status === 'PASSED';
 
   // KPIs
   const passed = isCompleted ? (testData?.passedTests || 0) : (isRunning ? Math.floor(progressPercent / 5) : 0);
@@ -117,9 +122,125 @@ export default function ProjectRunner({
   const total = isCompleted ? (testData?.totalTests || 0) : (isRunning ? 25 : 0);
 
   return (
-    <div className="flex flex-col gap-6 animate-fadeIn w-full max-w-7xl mx-auto pb-10 h-full">
+    <div className="flex flex-col gap-6 animate-fadeIn w-full max-w-7xl mx-auto pb-10 h-full mt-4">
       
-      {/* Main Execution Board */}
+      {!selectedTool ? (
+        <>
+          <div className="mb-4">
+            <h1 className="text-2xl font-black text-[#101828]">Select Testing Framework</h1>
+            <p className="text-[#667085] mt-2 font-medium">Choose a tool to execute your functional UI tests.</p>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            
+            {/* Playwright Card */}
+            <div 
+              onClick={() => setSelectedTool('playwright')}
+              className="bg-white rounded-3xl p-6 shadow-sm border-2 border-transparent hover:border-emerald-500 hover:shadow-lg transition-all cursor-pointer flex flex-col group relative overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500"></div>
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h3 className="text-xl font-black text-[#101828] mb-1">Playwright</h3>
+                  <p className="text-sm text-[#667085]">Recommended Tool</p>
+                </div>
+                <span className="px-3 py-1 bg-emerald-50 text-emerald-600 font-bold text-xs uppercase tracking-wider rounded-lg border border-emerald-100">
+                  Recommended
+                </span>
+              </div>
+              
+              <div className="flex gap-6 mb-8 flex-1">
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-[#101828] mb-3">Why Playwright?</p>
+                  <ul className="space-y-3">
+                    {['Auto-waiting mechanism', 'Cross-browser support', 'Parallel test execution', 'Rich reporting built-in'].map((item, i) => (
+                      <li key={i} className="flex items-center gap-2 text-sm text-[#667085]">
+                        <CheckCircle size={16} className="text-emerald-500 shrink-0" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                
+                <div className="w-32 flex flex-col items-center justify-center bg-[#F9FAFB] p-4 rounded-2xl border border-[#EAECF0]">
+                  <div className="w-16 h-16 mb-2">
+                    <CircularProgressbar
+                      value={95}
+                      text={`95%`}
+                      strokeWidth={12}
+                      styles={buildStyles({
+                        pathColor: '#10B981',
+                        textColor: '#101828',
+                        trailColor: '#F2F4F7',
+                        textSize: '24px'
+                      })}
+                    />
+                  </div>
+                  <span className="text-[10px] font-bold text-[#667085] text-center uppercase leading-tight">Coverage<br/>Prediction</span>
+                </div>
+              </div>
+              
+              <button className="w-full py-3 bg-[#101828] text-white font-bold rounded-xl group-hover:bg-[#5B5FF6] transition-colors">
+                Select Playwright
+              </button>
+            </div>
+            
+            {/* Selenium Card */}
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-[#EAECF0] flex flex-col opacity-75 grayscale hover:grayscale-0 transition-all cursor-not-allowed">
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h3 className="text-xl font-black text-[#101828] mb-1">Selenium</h3>
+                  <p className="text-sm text-[#667085]">Alternative</p>
+                </div>
+                <span className="px-3 py-1 bg-slate-100 text-[#667085] font-bold text-xs uppercase tracking-wider rounded-lg">
+                  Coming Soon
+                </span>
+              </div>
+              
+              <div className="flex-1 mb-8">
+                <p className="text-sm font-bold text-[#101828] mb-3">Features</p>
+                <ul className="space-y-3">
+                  {['Industry standard', 'Wide language support', 'Legacy app compatibility', 'Extensive community'].map((item, i) => (
+                    <li key={i} className="flex items-center gap-2 text-sm text-[#98A2B3]">
+                      <CheckCircle size={16} className="text-[#D0D5DD] shrink-0" />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              
+              <div className="w-full py-3 bg-[#F2F4F7] text-[#98A2B3] font-bold rounded-xl text-center flex items-center justify-center gap-2">
+                <Clock size={16} /> Coming Soon
+              </div>
+            </div>
+
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h1 className="text-2xl font-black text-[#101828]">Execute Tests</h1>
+              <p className="text-[#667085] mt-1 font-medium">Running Playwright UI tests for {repoName || 'repository'}</p>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setSelectedTool(null)}
+                className="px-4 py-2 bg-white border border-[#EAECF0] text-[#344054] font-bold rounded-xl shadow-sm hover:bg-[#F9FAFB] transition-colors"
+              >
+                Back to Tools
+              </button>
+              <button 
+                onClick={handleStart}
+                disabled={isRunning}
+                className="flex items-center gap-2 px-6 py-2 bg-[#5B5FF6] text-white font-bold rounded-xl shadow-sm hover:bg-[#4f53dc] disabled:opacity-50 transition-colors"
+              >
+                <Play size={18} /> Run Automated Tests
+              </button>
+            </div>
+          </div>
+          
+          {/* Main Execution Board */}
       <div className="bg-white rounded-3xl p-8 shadow-sm border border-[#EAECF0]">
         
         {/* Header & Progress */}
@@ -199,6 +320,14 @@ export default function ProjectRunner({
           <div className="col-span-2">
             <h3 className="text-sm font-bold text-[#101828] mb-4">Live Execution Logs</h3>
             <div className="flex flex-col gap-1 pr-4 max-h-[400px] min-h-[150px] overflow-y-auto custom-scrollbar">
+              
+              {errorMsg && (
+                <div className="p-4 mb-2 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3 text-rose-700 shadow-sm">
+                  <AlertCircle size={18} className="shrink-0 mt-0.5" />
+                  <div className="text-sm font-medium whitespace-pre-wrap">{errorMsg}</div>
+                </div>
+              )}
+
               {currentLogs.length > 0 ? (
                 currentLogs.map((log, idx) => (
                   <div key={idx} className="flex items-center gap-4 py-2 hover:bg-slate-50 rounded-lg px-2 transition-colors">
@@ -213,9 +342,14 @@ export default function ProjectRunner({
                         <Check size={10} /> Passed
                       </span>
                     )}
+                    {log.status === 'Failed' && (
+                      <span className="px-2 py-0.5 bg-rose-50 text-rose-700 text-[10px] font-bold rounded flex items-center gap-1">
+                        <XCircle size={10} /> Failed
+                      </span>
+                    )}
                     {log.status === 'Running' && (
-                      <span className="px-2 py-0.5 bg-rose-50 text-rose-600 text-[10px] font-bold rounded flex items-center gap-1">
-                        <Activity size={10} /> Running
+                      <span className="px-2 py-0.5 bg-indigo-50 text-[#5B5FF6] text-[10px] font-bold rounded flex items-center gap-1">
+                        <Activity size={10} className="animate-pulse" /> Running
                       </span>
                     )}
                   </div>
@@ -249,11 +383,11 @@ export default function ProjectRunner({
                 </div>
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-[#667085]">Start Time</span>
-                  <span className="font-medium text-[#101828]">10:24:15 AM</span>
+                  <span className="font-medium text-[#101828]">{new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-[#667085]">Elapsed Time</span>
-                  <span className="font-medium text-[#101828]">00:12:45</span>
+                  <span className="font-medium text-[#101828]">{testData?.executionTime || (isRunning ? 'Running...' : '0.0s')}</span>
                 </div>
               </div>
             </div>
@@ -305,6 +439,9 @@ export default function ProjectRunner({
           </button>
         )}
       </div>
+      
+      </>
+      )}
 
     </div>
   );
